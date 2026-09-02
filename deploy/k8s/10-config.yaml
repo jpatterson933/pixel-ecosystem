@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pe-config
+  namespace: pixel-ecosystem
+data:
+  NATS_URL: nats://nats:4222
+  # Set after running the worldgen job. Every service reads this.
+  WORLD_ID: REPLACE_ME
+  # Cloudflare R2 bucket holding snapshots and tiles.
+  STORE: r2:pixel-ecosystem
+  RUST_LOG: info
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: pe-r2
+  namespace: pixel-ecosystem
+type: Opaque
+stringData:
+  AWS_ACCESS_KEY_ID: REPLACE_ME
+  AWS_SECRET_ACCESS_KEY: REPLACE_ME
+  R2_ENDPOINT: https://REPLACE_ME.r2.cloudflarestorage.com

@@ -1,0 +1,8 @@
+{
+  "map_width": 65536,
+  "map_height": 65536,
+  "pixel_count": 5000000,
+  "color_count": 4096,
+  "tick_rate": 10,
+  "seed": 20260901
+}

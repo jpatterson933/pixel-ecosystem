@@ -1,0 +1,9 @@
+# Holds files written by worldgen (driver.json, genesis.json, config.json).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: worlds
+  namespace: pixel-ecosystem
+spec:
+  accessModes: ["ReadWriteMany"]
+  resources: { requests: { storage: 10Gi } }

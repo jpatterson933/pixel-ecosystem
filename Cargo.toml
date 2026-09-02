@@ -1,0 +1,54 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/sim-core",
+    "crates/protocol",
+    "crates/common",
+    "crates/sim-wasm",
+    "crates/worldgen",
+    "crates/region-server",
+    "crates/action-interface",
+    "crates/driver-random",
+    "crates/gateway",
+    "crates/summary-service",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "UNLICENSED"
+
+[workspace.dependencies]
+sim-core = { path = "crates/sim-core" }
+protocol = { path = "crates/protocol" }
+common = { path = "crates/common" }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+tokio-stream = "0.1"
+futures = "0.3"
+async-nats = "0.38"
+axum = { version = "0.7", features = ["ws"] }
+tower-http = { version = "0.5", features = ["cors", "fs"] }
+tokio-tungstenite = { version = "0.24", features = ["connect"] }
+object_store = { version = "0.11", features = ["aws"] }
+bytes = "1"
+rand = "0.8"
+rand_chacha = "0.3"
+sha2 = "0.10"
+hmac = "0.12"
+hex = "0.4"
+png = "0.17"
+clap = { version = "4", features = ["derive", "env"] }
+anyhow = "1"
+thiserror = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+wasm-bindgen = "0.2"
+serde-wasm-bindgen = "0.6"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1

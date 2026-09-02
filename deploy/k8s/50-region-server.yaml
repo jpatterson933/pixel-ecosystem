@@ -1,0 +1,42 @@
+# One pod per ownership range. Scaling out means adding pods with distinct
+# SERVER_IDs and rewriting the directory in the NATS KV bucket to split ranges.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: region-server
+  namespace: pixel-ecosystem
+spec:
+  serviceName: region-server
+  replicas: 1
+  selector:
+    matchLabels: { app: region-server }
+  template:
+    metadata:
+      labels: { app: region-server }
+    spec:
+      containers:
+        - name: region-server
+          image: pixel-ecosystem:latest
+          command: ["region-server"]
+          env:
+            - name: POD_NAME
+              valueFrom: { fieldRef: { fieldPath: metadata.name } }
+            # region-server-0 -> region-0
+            - name: SERVER_ID
+              value: "region-$(POD_NAME)"
+          envFrom:
+            - configMapRef: { name: pe-config }
+            - secretRef: { name: pe-r2 }
+          resources:
+            requests: { cpu: "2", memory: 8Gi }
+            limits: { memory: 16Gi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: region-server
+  namespace: pixel-ecosystem
+spec:
+  clusterIP: None
+  selector: { app: region-server }
+  ports: [{ port: 1, name: placeholder }]

@@ -1,0 +1,108 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: action-interface
+  namespace: pixel-ecosystem
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: action-interface }
+  template:
+    metadata:
+      labels: { app: action-interface }
+    spec:
+      containers:
+        - name: action-interface
+          image: pixel-ecosystem:latest
+          command: ["action-interface"]
+          env: [{ name: BIND, value: "0.0.0.0:8081" }]
+          envFrom: [{ configMapRef: { name: pe-config } }]
+          ports: [{ containerPort: 8081 }]
+          readinessProbe: { httpGet: { path: /health, port: 8081 } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: action-interface
+  namespace: pixel-ecosystem
+spec:
+  selector: { app: action-interface }
+  ports: [{ port: 8081, targetPort: 8081 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+  namespace: pixel-ecosystem
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: gateway }
+  template:
+    metadata:
+      labels: { app: gateway }
+    spec:
+      containers:
+        - name: gateway
+          image: pixel-ecosystem:latest
+          command: ["gateway"]
+          env: [{ name: BIND, value: "0.0.0.0:8080" }]
+          envFrom: [{ configMapRef: { name: pe-config } }]
+          ports: [{ containerPort: 8080 }]
+          readinessProbe: { httpGet: { path: /health, port: 8080 } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gateway
+  namespace: pixel-ecosystem
+spec:
+  selector: { app: gateway }
+  ports: [{ port: 8080, targetPort: 8080 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: summary-service
+  namespace: pixel-ecosystem
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: summary-service }
+  template:
+    metadata:
+      labels: { app: summary-service }
+    spec:
+      containers:
+        - name: summary-service
+          image: pixel-ecosystem:latest
+          command: ["summary-service"]
+          envFrom:
+            - configMapRef: { name: pe-config }
+            - secretRef: { name: pe-r2 }
+          resources:
+            requests: { cpu: "2", memory: 8Gi }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: driver-random
+  namespace: pixel-ecosystem
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: driver-random }
+  template:
+    metadata:
+      labels: { app: driver-random }
+    spec:
+      containers:
+        - name: driver-random
+          image: pixel-ecosystem:latest
+          command: ["sh", "-c", "driver-random --world-dir /worlds/$WORLD_ID"]
+          env: [{ name: INTERFACE_URL, value: "ws://action-interface:8081/ws" }]
+          envFrom: [{ configMapRef: { name: pe-config } }]
+          volumeMounts: [{ name: worlds, mountPath: /worlds, readOnly: true }]
+      volumes:
+        - name: worlds
+          persistentVolumeClaim: { claimName: worlds }

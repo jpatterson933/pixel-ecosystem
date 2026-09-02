@@ -1,0 +1,25 @@
+# Public entry points. The client (Cloudflare Pages) points VITE_GATEWAY_URL at the
+# gateway host. Tiles are served by Cloudflare R2's public bucket URL, not by this cluster.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: pixel-ecosystem
+  namespace: pixel-ecosystem
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: gateway.REPLACE_ME
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend: { service: { name: gateway, port: { number: 8080 } } }
+    - host: actions.REPLACE_ME
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend: { service: { name: action-interface, port: { number: 8081 } } }

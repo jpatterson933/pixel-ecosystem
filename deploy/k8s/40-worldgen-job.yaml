@@ -1,0 +1,41 @@
+# Run once per world. Mount the config, read WORLD_ID from the job log, put it in pe-config.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pe-world-config
+  namespace: pixel-ecosystem
+data:
+  world.json: |
+    {
+      "map_width": 65536,
+      "map_height": 65536,
+      "pixel_count": 5000000,
+      "color_count": 4096,
+      "tick_rate": 10,
+      "seed": 20260901
+    }
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: worldgen
+  namespace: pixel-ecosystem
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: worldgen
+          image: pixel-ecosystem:latest
+          command: ["worldgen", "--config", "/config/world.json", "--out", "/worlds", "--server-id", "region-0"]
+          envFrom:
+            - configMapRef: { name: pe-config }
+          volumeMounts:
+            - { name: world-config, mountPath: /config, readOnly: true }
+            - { name: worlds, mountPath: /worlds }
+      volumes:
+        - name: world-config
+          configMap: { name: pe-world-config }
+        - name: worlds
+          persistentVolumeClaim: { claimName: worlds }

@@ -1,0 +1,86 @@
+# Local run of the whole system. See SETUP.md for the order of operations.
+services:
+  nats:
+    image: nats:2.10-alpine
+    command: ["-js", "-sd", "/data", "-m", "8222"]
+    ports: ["4222:4222", "8222:8222"]
+    volumes: ["nats-data:/data"]
+
+  worldgen:
+    build: { context: ., dockerfile: deploy/Dockerfile }
+    image: pixel-ecosystem:local
+    profiles: ["tools"]
+    entrypoint: ["worldgen"]
+    environment: { NATS_URL: nats://nats:4222 }
+    volumes: ["./worlds:/worlds", "./configs:/configs:ro"]
+    command: ["--config", "/configs/small.json", "--out", "/worlds"]
+    depends_on: [nats]
+
+  region-server:
+    image: pixel-ecosystem:local
+    command: ["region-server"]
+    environment:
+      NATS_URL: nats://nats:4222
+      WORLD_ID: ${WORLD_ID}
+      SERVER_ID: region-0
+      STORE: local:/data
+    volumes: ["./data:/data"]
+    depends_on: [nats]
+    restart: unless-stopped
+
+  action-interface:
+    image: pixel-ecosystem:local
+    command: ["action-interface"]
+    environment:
+      NATS_URL: nats://nats:4222
+      WORLD_ID: ${WORLD_ID}
+      BIND: 0.0.0.0:8081
+    ports: ["8081:8081"]
+    depends_on: [nats]
+    restart: unless-stopped
+
+  gateway:
+    image: pixel-ecosystem:local
+    command: ["gateway"]
+    environment:
+      NATS_URL: nats://nats:4222
+      WORLD_ID: ${WORLD_ID}
+      BIND: 0.0.0.0:8080
+    ports: ["8080:8080"]
+    depends_on: [nats]
+    restart: unless-stopped
+
+  summary-service:
+    image: pixel-ecosystem:local
+    command: ["summary-service"]
+    environment:
+      NATS_URL: nats://nats:4222
+      WORLD_ID: ${WORLD_ID}
+      STORE: local:/data
+      BIND: 0.0.0.0:8082
+    ports: ["8082:8082"]
+    volumes: ["./data:/data"]
+    depends_on: [nats]
+    restart: unless-stopped
+
+  driver-random:
+    image: pixel-ecosystem:local
+    command: ["driver-random", "--world-dir", "/worlds/${WORLD_ID}"]
+    environment:
+      INTERFACE_URL: ws://action-interface:8081/ws
+    volumes: ["./worlds:/worlds:ro"]
+    depends_on: [action-interface]
+    restart: unless-stopped
+
+  client:
+    build:
+      context: .
+      dockerfile: deploy/client.Dockerfile
+      args:
+        VITE_GATEWAY_URL: http://localhost:8080
+        VITE_TILE_BASE_URL: http://localhost:8082
+    ports: ["3000:80"]
+    depends_on: [gateway, summary-service]
+
+volumes:
+  nats-data: {}
