@@ -2,18 +2,73 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::actions::{registry, ActionContext};
 use crate::{
-    Action, Arrival, ChunkCoord, Departure, Event, Outcome, Pixel, PixelId, QueuedAction,
-    RejectReason, Tick, WorldConfig, CHUNK_SIZE,
+    Arrival, Attributes, ChunkCoord, Departure, Event, Outcome, Pixel, PixelId, QueuedAction,
+    RejectReason, Rgba, Tick, WorldConfig, CHUNK_SIZE,
 };
 
-/// One chunk's authoritative state. Sparse: only pixels are stored.
+/// One chunk's authoritative state. Sparse: only pixels, terrain, and attributes are stored.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(from = "ChunkRepr", into = "ChunkRepr")]
 pub struct Chunk {
     pub coord: ChunkCoord,
     pub pixels: HashMap<PixelId, Pixel>,
     /// Cell (x, y) in map coordinates to the pixel occupying it.
     pub occupancy: HashMap<(u32, u32), PixelId>,
+    /// Terrain color per cell. Absent means white.
+    pub cells: HashMap<(u32, u32), Rgba>,
+    /// Module-owned per-pixel state.
+    pub attributes: HashMap<PixelId, Attributes>,
+}
+
+/// Serialized form: JSON needs string keys, so maps keyed by tuples become lists.
+#[derive(Serialize, Deserialize)]
+struct ChunkRepr {
+    coord: ChunkCoord,
+    pixels: Vec<Pixel>,
+    #[serde(default)]
+    cells: Vec<CellEntry>,
+    #[serde(default)]
+    attributes: Vec<(PixelId, Attributes)>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CellEntry {
+    pub x: u32,
+    pub y: u32,
+    pub color: Rgba,
+}
+
+impl From<ChunkRepr> for Chunk {
+    fn from(r: ChunkRepr) -> Self {
+        let mut c = Chunk::new(r.coord);
+        for p in r.pixels {
+            c.insert(p);
+        }
+        for e in r.cells {
+            c.cells.insert((e.x, e.y), e.color);
+        }
+        for (id, a) in r.attributes {
+            c.attributes.insert(id, a);
+        }
+        c
+    }
+}
+
+impl From<Chunk> for ChunkRepr {
+    fn from(c: Chunk) -> Self {
+        ChunkRepr {
+            coord: c.coord,
+            pixels: c.pixels.into_values().collect(),
+            cells: c
+                .cells
+                .into_iter()
+                .map(|((x, y), color)| CellEntry { x, y, color })
+                .collect(),
+            attributes: c.attributes.into_iter().collect(),
+        }
+    }
 }
 
 pub struct TickInput {
@@ -35,15 +90,28 @@ impl Chunk {
             coord,
             pixels: HashMap::new(),
             occupancy: HashMap::new(),
+            cells: HashMap::new(),
+            attributes: HashMap::new(),
         }
     }
 
     pub fn is_empty(&self) -> bool {
-        self.pixels.is_empty()
+        self.pixels.is_empty() && self.cells.is_empty()
     }
 
     pub fn contains_cell(&self, x: u32, y: u32) -> bool {
         ChunkCoord::of_cell(x, y) == self.coord
+    }
+
+    pub fn cell_entries(&self) -> Vec<CellEntry> {
+        self.cells
+            .iter()
+            .map(|((x, y), color)| CellEntry {
+                x: *x,
+                y: *y,
+                color: *color,
+            })
+            .collect()
     }
 
     /// Insert without emitting events. Used for genesis, arrivals, and replay.
@@ -58,17 +126,35 @@ impl Chunk {
         Some(p)
     }
 
-    /// Apply a single event to this chunk's state. Used for replay from the log.
+    /// Apply a single primitive event to this chunk's state. Replay and live
+    /// resolution both go through here, so state is always the fold of the log.
     pub fn apply(&mut self, ev: &Event) {
         match ev {
             Event::Config { .. } => {}
-            Event::Placed { id, x, y, color } | Event::Arrived { id, x, y, color } => {
+            Event::Placed { id, x, y, color } => {
                 self.insert(Pixel {
                     id: *id,
                     x: *x,
                     y: *y,
                     color: *color,
                 });
+            }
+            Event::Arrived {
+                id,
+                x,
+                y,
+                color,
+                attributes,
+            } => {
+                self.insert(Pixel {
+                    id: *id,
+                    x: *x,
+                    y: *y,
+                    color: *color,
+                });
+                if !attributes.is_empty() {
+                    self.attributes.insert(*id, attributes.clone());
+                }
             }
             Event::Moved { id, to, .. } => {
                 if let Some(mut p) = self.remove(*id) {
@@ -79,6 +165,28 @@ impl Chunk {
             }
             Event::Departed { id, .. } => {
                 self.remove(*id);
+                self.attributes.remove(id);
+            }
+            Event::CellSet { x, y, color } => match color {
+                Some(c) => {
+                    self.cells.insert((*x, *y), *c);
+                }
+                None => {
+                    self.cells.remove(&(*x, *y));
+                }
+            },
+            Event::AttributeSet {
+                id,
+                module,
+                key,
+                value,
+            } => {
+                self.attributes
+                    .entry(*id)
+                    .or_default()
+                    .entry(module.clone())
+                    .or_default()
+                    .insert(key.clone(), value.clone());
             }
         }
     }
@@ -107,26 +215,28 @@ impl Chunk {
                     None => continue,
                 }
             }
-            self.insert(p);
-            out.events.push(Event::Arrived {
+            let ev = Event::Arrived {
                 id: p.id,
                 x: p.x,
                 y: p.y,
                 color: p.color,
-            });
+                attributes: a.attributes,
+            };
+            self.apply(&ev);
+            out.events.push(ev);
         }
 
         // Actions.
         input.actions.sort_by_key(|a| (a.seq, a.pixel_id));
         for qa in input.actions {
-            let outcome = self.resolve(cfg, &qa, &mut out);
+            let outcome = self.resolve(cfg, input.tick, &qa, &mut out);
             out.outcomes.push(outcome);
         }
 
         out
     }
 
-    fn resolve(&mut self, cfg: &WorldConfig, qa: &QueuedAction, out: &mut TickOutput) -> Outcome {
+    fn resolve(&mut self, cfg: &WorldConfig, tick: Tick, qa: &QueuedAction, out: &mut TickOutput) -> Outcome {
         let reject = |p: Option<&Pixel>, reason: RejectReason| Outcome {
             seq: qa.seq,
             pixel_id: qa.pixel_id,
@@ -139,71 +249,36 @@ impl Chunk {
         let Some(p) = self.pixels.get(&qa.pixel_id).copied() else {
             return reject(None, RejectReason::NotFound);
         };
-        if !qa.action.is_valid() {
-            return reject(Some(&p), RejectReason::InvalidAction);
+        let Some(module) = registry().get(&qa.action.kind) else {
+            return reject(Some(&p), RejectReason::UnknownAction);
+        };
+        if module.validate(&qa.action.params).is_err() {
+            return reject(Some(&p), RejectReason::InvalidParams);
         }
 
-        match qa.action {
-            Action::Move { dx, dy } => {
-                let nx = p.x as i64 + dx as i64;
-                let ny = p.y as i64 + dy as i64;
-                if !cfg.contains_cell(nx, ny) {
-                    return reject(Some(&p), RejectReason::OffMap);
-                }
-                let (nx, ny) = (nx as u32, ny as u32);
-                let dest = ChunkCoord::of_cell(nx, ny);
+        let mut ctx = ActionContext::new(self, cfg, tick, qa.seq, module.name(), p);
+        let result = module.resolve(&mut ctx, &p, &qa.action.params);
+        let (events, departure, after) = ctx.finish();
 
-                if dest == self.coord {
-                    if self.occupancy.contains_key(&(nx, ny)) {
-                        return reject(Some(&p), RejectReason::Occupied);
-                    }
-                    self.remove(p.id);
-                    let moved = Pixel {
-                        x: nx,
-                        y: ny,
-                        ..p
-                    };
-                    self.insert(moved);
-                    out.events.push(Event::Moved {
-                        id: p.id,
-                        from: [p.x, p.y],
-                        to: [nx, ny],
-                    });
-                    Outcome {
-                        seq: qa.seq,
-                        pixel_id: p.id,
-                        accepted: true,
-                        x: nx,
-                        y: ny,
-                        reason: None,
-                    }
-                } else {
-                    // Cross-chunk: depart now, arrive next tick in the destination.
-                    self.remove(p.id);
-                    let moved = Pixel {
-                        x: nx,
-                        y: ny,
-                        ..p
-                    };
-                    out.events.push(Event::Departed {
-                        id: p.id,
-                        from: [p.x, p.y],
-                        to: [nx, ny],
-                    });
-                    out.departures.push(Departure {
-                        pixel: moved,
-                        to: dest,
-                    });
-                    Outcome {
-                        seq: qa.seq,
-                        pixel_id: p.id,
-                        accepted: true,
-                        x: nx,
-                        y: ny,
-                        reason: None,
-                    }
+        match result {
+            Ok(()) => {
+                for ev in &events {
+                    self.apply(ev);
+                }
+                out.events.extend(events);
+                if let Some(d) = departure {
+                    out.departures.push(d);
+                }
+                Outcome {
+                    seq: qa.seq,
+                    pixel_id: p.id,
+                    accepted: true,
+                    x: after.x,
+                    y: after.y,
+                    reason: None,
                 }
             }
+            Err(reason) => reject(Some(&p), reason),
         }
     }
 

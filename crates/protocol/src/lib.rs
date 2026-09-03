@@ -3,7 +3,7 @@
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
-use sim_core::{hilbert, Action, Arrival, Chunk, ChunkCoord, Departure, Event, Pixel, PixelId, RejectReason, Tick, WorldConfig};
+use sim_core::{hilbert, Action, Arrival, CellEntry, Chunk, ChunkCoord, Departure, Event, Pixel, PixelId, RejectReason, Tick, WorldConfig};
 
 // ---------------------------------------------------------------------------
 // NATS naming
@@ -247,6 +247,8 @@ pub struct ChunkState {
     pub cx: u32,
     pub cy: u32,
     pub pixels: Vec<Pixel>,
+    #[serde(default)]
+    pub cells: Vec<CellEntry>,
 }
 
 // ---------------------------------------------------------------------------

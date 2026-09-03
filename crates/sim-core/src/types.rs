@@ -1,9 +1,15 @@
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::CHUNK_SIZE;
 
 pub type PixelId = u64;
 pub type Tick = u64;
+
+/// Module name -> key -> value. Per-pixel state owned by action modules.
+pub type Attributes = HashMap<String, HashMap<String, Value>>;
 
 /// RGBA color. Serialized as a 4-element array.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -38,26 +44,18 @@ impl ChunkCoord {
     }
 }
 
-/// The only action in version one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum Action {
-    Move { dx: i8, dy: i8 },
-}
-
-impl Action {
-    pub fn is_valid(&self) -> bool {
-        match self {
-            Action::Move { dx, dy } => {
-                (-1..=1).contains(dx) && (-1..=1).contains(dy) && !(*dx == 0 && *dy == 0)
-            }
-        }
-    }
+/// What a driver asks for. `kind` names a registered action module; `params`
+/// must satisfy that module's schema.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Action {
+    pub kind: String,
+    #[serde(default)]
+    pub params: Value,
 }
 
 /// An action queued for resolution at the next tick.
 /// `seq` is arrival order and is the primary sort key.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct QueuedAction {
     pub seq: u64,
     pub pixel_id: PixelId,
@@ -65,20 +63,25 @@ pub struct QueuedAction {
 }
 
 /// A pixel arriving from another chunk, to be placed before actions resolve.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Arrival {
     pub pixel: Pixel,
+    #[serde(default)]
+    pub attributes: Attributes,
 }
 
 /// A pixel leaving this chunk for another one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Departure {
     pub pixel: Pixel,
     pub to: ChunkCoord,
+    #[serde(default)]
+    pub attributes: Attributes,
 }
 
-/// Events are the only thing the world emits. Every accepted change is one.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// The closed vocabulary of things that can happen. Every consumer understands all of these.
+/// Action modules compose them; they never add to them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum Event {
     /// Event zero of a world.
@@ -90,7 +93,23 @@ pub enum Event {
     /// Pixel left this chunk. The destination chunk emits Arrived next tick.
     Departed { id: PixelId, from: [u32; 2], to: [u32; 2] },
     /// Pixel entered this chunk.
-    Arrived { id: PixelId, x: u32, y: u32, color: Rgba },
+    Arrived {
+        id: PixelId,
+        x: u32,
+        y: u32,
+        color: Rgba,
+        #[serde(default, skip_serializing_if = "Attributes::is_empty")]
+        attributes: Attributes,
+    },
+    /// Terrain at a cell changed. `None` clears it back to white.
+    CellSet { x: u32, y: u32, color: Option<Rgba> },
+    /// A module-owned attribute on a pixel changed.
+    AttributeSet {
+        id: PixelId,
+        module: String,
+        key: String,
+        value: Value,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -99,7 +118,10 @@ pub enum RejectReason {
     Occupied,
     OffMap,
     NotFound,
-    InvalidAction,
+    UnknownAction,
+    InvalidParams,
+    /// Module-specific rule refused the action.
+    Refused,
 }
 
 /// Per-action outcome, returned to the submitter.

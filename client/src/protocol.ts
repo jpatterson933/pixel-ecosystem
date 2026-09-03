@@ -22,11 +22,19 @@ export interface PixelState {
   color: Rgba
 }
 
+export interface CellState {
+  x: number
+  y: number
+  color: Rgba
+}
+
 export type PixelEvent =
   | { t: 'placed'; id: number; x: number; y: number; color: Rgba }
   | { t: 'arrived'; id: number; x: number; y: number; color: Rgba }
   | { t: 'moved'; id: number; from: [number, number]; to: [number, number] }
   | { t: 'departed'; id: number; from: [number, number]; to: [number, number] }
+  | { t: 'cell_set'; x: number; y: number; color: Rgba | null }
+  | { t: 'attribute_set'; id: number; module: string; key: string; value: unknown }
   | { t: 'config'; config: WorldConfig }
 
 export interface WorldMessage extends WorldInfo {
@@ -40,6 +48,7 @@ export interface ChunkMessage {
   cx: number
   cy: number
   pixels: PixelState[]
+  cells?: CellState[]
 }
 
 export interface EventsMessage {

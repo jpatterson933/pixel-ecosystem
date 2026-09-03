@@ -36,8 +36,12 @@ impl Router {
         let mut by_server: HashMap<String, (Vec<usize>, Vec<ServerAction>)> = HashMap::new();
 
         for (i, e) in batch.envelopes.into_iter().enumerate() {
-            if !e.action.is_valid() {
-                results[i] = Some(error_result(e.pixel_id, "invalid_action"));
+            let Some(module) = sim_core::registry().get(&e.action.kind) else {
+                results[i] = Some(error_result(e.pixel_id, "unknown_action"));
+                continue;
+            };
+            if let Err(msg) = module.validate(&e.action.params) {
+                results[i] = Some(error_result(e.pixel_id, &format!("invalid_params: {msg}")));
                 continue;
             }
             if !protocol::verify_token(&self.meta.secret, e.pixel_id, &e.credential) {

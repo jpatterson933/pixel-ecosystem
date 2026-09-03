@@ -27,6 +27,9 @@ struct Args {
     /// Envelopes per WebSocket message.
     #[arg(long, default_value_t = 2000)]
     batch_size: usize,
+    /// Probability per pixel per tick of sending `mark` instead of `move`.
+    #[arg(long, env = "MARK_CHANCE", default_value_t = 0.0)]
+    mark_chance: f64,
 }
 
 const DIRS: [(i8, i8); 8] = [
@@ -106,10 +109,21 @@ async fn main() -> Result<()> {
                 let envelopes: Vec<Envelope> = chunk
                     .iter()
                     .map(|(id, at)| {
-                        let (dx, dy) = DIRS[rng.gen_range(0..DIRS.len())];
+                        let action = if args.mark_chance > 0.0 && rng.gen_bool(args.mark_chance) {
+                            Action {
+                                kind: "mark".into(),
+                                params: serde_json::json!({}),
+                            }
+                        } else {
+                            let (dx, dy) = DIRS[rng.gen_range(0..DIRS.len())];
+                            Action {
+                                kind: "move".into(),
+                                params: serde_json::json!({ "dx": dx, "dy": dy }),
+                            }
+                        };
                         Envelope {
                             pixel_id: *id,
-                            action: Action::Move { dx, dy },
+                            action,
                             at: *at,
                             credential: tokens.get(id).cloned().unwrap_or_default(),
                         }

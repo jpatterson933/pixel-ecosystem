@@ -40,6 +40,7 @@ struct Pyramid {
     /// Index 0 is level 1. Each map is texel -> color histogram.
     hist: Vec<HashMap<TexelKey, HashMap<Rgba, u32>>>,
     colors: HashMap<PixelId, Rgba>,
+    terrain: HashMap<(u32, u32), Rgba>,
     dirty: HashSet<TileKey>,
 }
 
@@ -49,6 +50,7 @@ impl Pyramid {
             levels,
             hist: (0..levels).map(|_| HashMap::new()).collect(),
             colors: HashMap::new(),
+            terrain: HashMap::new(),
             dirty: HashSet::new(),
         }
     }
@@ -87,10 +89,20 @@ impl Pyramid {
     fn apply(&mut self, ev: &Event) {
         match ev {
             Event::Config { .. } => {}
-            Event::Placed { id, x, y, color } | Event::Arrived { id, x, y, color } => {
+            Event::Placed { id, x, y, color } | Event::Arrived { id, x, y, color, .. } => {
                 self.colors.insert(*id, *color);
                 self.add(*x, *y, *color);
             }
+            Event::CellSet { x, y, color } => {
+                if let Some(old) = self.terrain.remove(&(*x, *y)) {
+                    self.remove(*x, *y, old);
+                }
+                if let Some(c) = color {
+                    self.terrain.insert((*x, *y), *c);
+                    self.add(*x, *y, *c);
+                }
+            }
+            Event::AttributeSet { .. } => {}
             Event::Moved { id, from, to } => {
                 if let Some(c) = self.colors.get(id).copied() {
                     self.remove(from[0], from[1], c);

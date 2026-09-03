@@ -219,17 +219,33 @@ Ownership lives in the NATS key-value bucket `pe_<world id>` under the key `dire
 
 ## 8. Using the action interface directly
 
-HTTP:
+List the actions the world supports, with parameter schemas:
 
 ```bash
-curl -s localhost:8081/actions -H 'content-type: application/json' -d '{"envelopes":[{"pixel_id":1,"action":{"kind":"move","dx":1,"dy":0},"at":[10,20],"credential":"<token>"}]}'
+curl -s localhost:8081/actions
+```
+
+Submit actions over HTTP. An action is `{ "kind": "<module name>", "params": { ... } }`.
+
+```bash
+curl -s localhost:8081/actions -H 'content-type: application/json' -d '{"envelopes":[{"pixel_id":1,"action":{"kind":"move","params":{"dx":1,"dy":0}},"at":[10,20],"credential":"<token>"}]}'
 ```
 
 A pixel's credential is the first 32 hex characters of HMAC-SHA256 keyed by the world secret over the pixel id as 8 little-endian bytes. The reference driver computes them from `driver.json`.
 
-MCP: point an MCP client at `http://<action interface>/mcp` using the Streamable HTTP transport. Tools are `move_pixel` and `world_info`.
+MCP: point an MCP client at `http://<action interface>/mcp` using the Streamable HTTP transport. There is one tool per action module, named after the module, plus `world_info` and `list_actions`.
 
-## 9. Building the WASM simulation core
+## 9. Adding an action
+
+Actions are modules in `crates/sim-core/src/actions/`. See `PROPOSAL-ACTIONS.md` for the design.
+
+1. Create `crates/sim-core/src/actions/<name>.rs` with a params struct deriving `Deserialize` and `JsonSchema`, and a type implementing `Module` with `NAME`, `DESCRIPTION`, `Params`, and `resolve`.
+2. Add `pub mod <name>;` and one `Box::new(<name>::<Type>)` line in `crates/sim-core/src/actions/mod.rs`.
+3. Rebuild.
+
+The module acts only through `ActionContext`: `move_to`, `set_cell`, `set_attribute`, and the read methods. Validation, the HTTP listing, and the MCP tool come from the params struct automatically. Nothing outside sim-core changes.
+
+## 10. Building the WASM simulation core
 
 The client does not require it in this version, since a viewer submits no actions and therefore has nothing to predict. To build it anyway:
 
@@ -237,7 +253,7 @@ The client does not require it in this version, since a viewer submits no action
 cd crates/sim-wasm && wasm-pack build --target web
 ```
 
-## 10. Things to know
+## 11. Things to know
 
 - The client's prediction toggle is wired but has no effect until the client is also a driver.
 - Cross-server pixel handoffs travel over core NATS, not the durable log. If a region server dies in the same tick a pixel crosses to it from another server, that pixel is lost. Single-server deployments have no such window.

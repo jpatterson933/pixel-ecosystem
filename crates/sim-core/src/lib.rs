@@ -1,13 +1,15 @@
 //! Simulation core: the rules of the world and nothing else.
 //! No networking, no storage, no clock. Deterministic by construction.
 
+pub mod actions;
 pub mod chunk;
 pub mod config;
 pub mod generate;
 pub mod hilbert;
 pub mod types;
 
-pub use chunk::{Chunk, TickInput, TickOutput};
+pub use actions::{registry, ActionContext, ActionInfo, ActionModule, Module};
+pub use chunk::{CellEntry, Chunk, TickInput, TickOutput};
 pub use config::WorldConfig;
 pub use types::*;
 

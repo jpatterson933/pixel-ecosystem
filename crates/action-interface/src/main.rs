@@ -44,7 +44,7 @@ async fn main() -> Result<()> {
     let app = axum::Router::new()
         .route("/health", get(|| async { "ok" }))
         .route("/world", get(world))
-        .route("/actions", post(http_actions))
+        .route("/actions", get(list_actions).post(http_actions))
         .route("/ws", get(ws_upgrade))
         .route("/mcp", post(mcp))
         .layer(CorsLayer::permissive())
@@ -62,6 +62,10 @@ async fn world(State(r): State<Arc<Router>>) -> Json<WorldInfo> {
         config: r.meta.config.clone(),
         summary_levels: r.meta.config.summary_levels(),
     })
+}
+
+async fn list_actions() -> Json<Vec<sim_core::ActionInfo>> {
+    Json(sim_core::registry().infos())
 }
 
 async fn http_actions(State(r): State<Arc<Router>>, Json(batch): Json<ActionBatch>) -> impl IntoResponse {
@@ -134,29 +138,38 @@ async fn mcp(State(r): State<Arc<Router>>, Json(req): Json<Value>) -> impl IntoR
 }
 
 fn tool_definitions() -> Value {
-    json!([
-        {
-            "name": "move_pixel",
-            "description": "Move a pixel one cell. dx and dy are each -1, 0, or 1 and not both zero. x and y are the caller's last known position of the pixel.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "pixel_id": { "type": "integer" },
-                    "dx": { "type": "integer", "minimum": -1, "maximum": 1 },
-                    "dy": { "type": "integer", "minimum": -1, "maximum": 1 },
-                    "x": { "type": "integer" },
-                    "y": { "type": "integer" },
-                    "credential": { "type": "string" }
-                },
-                "required": ["pixel_id", "dx", "dy", "x", "y", "credential"]
-            }
-        },
-        {
-            "name": "world_info",
-            "description": "The world's id and configuration.",
-            "inputSchema": { "type": "object", "properties": {} }
-        }
-    ])
+    let mut tools: Vec<Value> = sim_core::registry()
+        .infos()
+        .into_iter()
+        .map(|info| {
+            json!({
+                "name": info.name,
+                "description": format!("{} x and y are the caller's last known position of the pixel.", info.description),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "pixel_id": { "type": "integer" },
+                        "x": { "type": "integer" },
+                        "y": { "type": "integer" },
+                        "credential": { "type": "string" },
+                        "params": info.schema
+                    },
+                    "required": ["pixel_id", "x", "y", "credential"]
+                }
+            })
+        })
+        .collect();
+    tools.push(json!({
+        "name": "world_info",
+        "description": "The world's id and configuration.",
+        "inputSchema": { "type": "object", "properties": {} }
+    }));
+    tools.push(json!({
+        "name": "list_actions",
+        "description": "Every action a pixel can take, with parameter schemas.",
+        "inputSchema": { "type": "object", "properties": {} }
+    }));
+    Value::Array(tools)
 }
 
 async fn tools_call(r: &Router, params: &Value) -> Result<Value, (i64, String)> {
@@ -171,12 +184,11 @@ async fn tools_call(r: &Router, params: &Value) -> Result<Value, (i64, String)> 
             };
             Ok(text_content(&info, false))
         }
-        "move_pixel" => {
+        "list_actions" => Ok(text_content(&sim_core::registry().infos(), false)),
+        kind if sim_core::registry().get(kind).is_some() => {
             let get_i = |k: &str| args.get(k).and_then(|v| v.as_i64());
-            let (Some(pixel_id), Some(dx), Some(dy), Some(x), Some(y)) =
-                (get_i("pixel_id"), get_i("dx"), get_i("dy"), get_i("x"), get_i("y"))
-            else {
-                return Err((-32602, "missing or invalid arguments".into()));
+            let (Some(pixel_id), Some(x), Some(y)) = (get_i("pixel_id"), get_i("x"), get_i("y")) else {
+                return Err((-32602, "pixel_id, x, and y are required".into()));
             };
             let credential = args
                 .get("credential")
@@ -185,9 +197,9 @@ async fn tools_call(r: &Router, params: &Value) -> Result<Value, (i64, String)> 
                 .to_string();
             let envelope = Envelope {
                 pixel_id: pixel_id as u64,
-                action: Action::Move {
-                    dx: dx as i8,
-                    dy: dy as i8,
+                action: Action {
+                    kind: kind.to_string(),
+                    params: args.get("params").cloned().unwrap_or(Value::Null),
                 },
                 at: [x as u32, y as u32],
                 credential,

@@ -212,6 +212,7 @@ async fn fetch_state(state: &AppState, c: ChunkCoord) -> ChunkState {
         cx: c.cx,
         cy: c.cy,
         pixels: Vec::new(),
+        cells: Vec::new(),
     };
     let Some(owner) = state.meta.directory.owner_of(c) else { return empty };
     let subject = subjects::state(&state.meta.world_id, owner);

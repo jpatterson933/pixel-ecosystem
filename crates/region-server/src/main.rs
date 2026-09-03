@@ -156,7 +156,7 @@ impl Server {
             .context("creating replay consumer")?;
 
         // Pixels that departed an owned chunk and whose arrival has not been logged yet.
-        let mut in_flight: HashMap<PixelId, Pixel> = HashMap::new();
+        let mut in_flight: HashMap<PixelId, (Pixel, sim_core::Attributes)> = HashMap::new();
         let mut replayed = 0u64;
         loop {
             let mut batch = consumer
@@ -198,12 +198,15 @@ impl Server {
                         if let Some(p) = chunk.pixels.get(id) {
                             in_flight.insert(
                                 *id,
-                                Pixel {
-                                    id: *id,
-                                    x: to[0],
-                                    y: to[1],
-                                    color: p.color,
-                                },
+                                (
+                                    Pixel {
+                                        id: *id,
+                                        x: to[0],
+                                        y: to[1],
+                                        color: p.color,
+                                    },
+                                    chunk.attributes.get(id).cloned().unwrap_or_default(),
+                                ),
                             );
                         }
                     }
@@ -221,14 +224,14 @@ impl Server {
         }
         // Requeue anything still in flight, then drop pending arrivals for pixels
         // that already exist somewhere we own.
-        for (_, p) in in_flight {
+        for (_, (p, attributes)) in in_flight {
             let dest = ChunkCoord::of_cell(p.x, p.y);
             if self.owned(dest) {
-                self.arrivals.entry(dest).or_default().push(Arrival { pixel: p });
+                self.arrivals.entry(dest).or_default().push(Arrival { pixel: p, attributes });
             } else if let Some(owner) = self.meta.directory.owner_of(dest) {
                 let msg = HandoffMessage {
                     tick: self.tick,
-                    departures: vec![Departure { pixel: p, to: dest }],
+                    departures: vec![Departure { pixel: p, to: dest, attributes }],
                 };
                 if let Ok(payload) = serde_json::to_vec(&msg) {
                     let _ = self.client.publish(subjects::handoff(&world, owner), payload.into()).await;
@@ -358,7 +361,7 @@ impl Server {
         for d in h.departures {
             if self.owned(d.to) {
                 self.index.insert(d.pixel.id, d.to);
-                self.arrivals.entry(d.to).or_default().push(Arrival { pixel: d.pixel });
+                self.arrivals.entry(d.to).or_default().push(Arrival { pixel: d.pixel, attributes: d.attributes });
             } else {
                 warn!(?d.to, "handoff for chunk this server does not own");
             }
@@ -375,16 +378,13 @@ impl Server {
             cx: req.cx,
             cy: req.cy,
         };
-        let pixels = self
-            .chunks
-            .get(&coord)
-            .map(|c| c.pixels.values().copied().collect())
-            .unwrap_or_default();
+        let chunk = self.chunks.get(&coord);
         let state = ChunkState {
             tick: self.tick,
             cx: req.cx,
             cy: req.cy,
-            pixels,
+            pixels: chunk.map(|c| c.pixels.values().copied().collect()).unwrap_or_default(),
+            cells: chunk.map(|c| c.cell_entries()).unwrap_or_default(),
         };
         if let Ok(payload) = serde_json::to_vec(&state) {
             let _ = self.client.publish(reply, payload.into()).await;
@@ -431,7 +431,7 @@ impl Server {
             for d in out.departures {
                 if self.owned(d.to) {
                     self.index.insert(d.pixel.id, d.to);
-                    local_arrivals.push((d.to, Arrival { pixel: d.pixel }));
+                    local_arrivals.push((d.to, Arrival { pixel: d.pixel, attributes: d.attributes }));
                 } else if let Some(owner) = self.meta.directory.owner_of(d.to) {
                     self.index.remove(&d.pixel.id);
                     remote.entry(owner.to_string()).or_default().push(d);
