@@ -244,6 +244,7 @@ impl Chunk {
             x: p.map(|p| p.x).unwrap_or(0),
             y: p.map(|p| p.y).unwrap_or(0),
             reason: Some(reason),
+            data: None,
         };
 
         let Some(p) = self.pixels.get(&qa.pixel_id).copied() else {
@@ -252,13 +253,16 @@ impl Chunk {
         let Some(module) = registry().get(&qa.action.kind) else {
             return reject(Some(&p), RejectReason::UnknownAction);
         };
+        if !cfg.action_enabled(module.name()) {
+            return reject(Some(&p), RejectReason::DisabledAction);
+        }
         if module.validate(&qa.action.params).is_err() {
             return reject(Some(&p), RejectReason::InvalidParams);
         }
 
         let mut ctx = ActionContext::new(self, cfg, tick, qa.seq, module.name(), p);
         let result = module.resolve(&mut ctx, &p, &qa.action.params);
-        let (events, departure, after) = ctx.finish();
+        let (events, departure, after, data) = ctx.finish();
 
         match result {
             Ok(()) => {
@@ -276,6 +280,7 @@ impl Chunk {
                     x: after.x,
                     y: after.y,
                     reason: None,
+                    data,
                 }
             }
             Err(reason) => reject(Some(&p), reason),

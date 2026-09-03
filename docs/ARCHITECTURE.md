@@ -1,7 +1,6 @@
-# Pixel Ecosystem: Infrastructure Proposal
+# Architecture
 
-Status: draft for review
-Date: 2026-09-01
+Status: as built. This began as the infrastructure proposal and now describes the running system. Actions are covered separately in `ACTIONS.md`.
 
 ## 1. Vision
 
@@ -46,7 +45,7 @@ Because every choice descends from the seed, any world can be reconstructed exac
 
 ## 4. The Pixel
 
-A pixel is the only entity in version one.
+A pixel is the only entity that acts.
 
 | Field    | Size         | Meaning                                  |
 | -------- | ------------ | ---------------------------------------- |
@@ -56,17 +55,17 @@ A pixel is the only entity in version one.
 
 About 20 bytes per pixel. A billion pixels is roughly 20 gigabytes distributed across region servers.
 
-### The action: move
+Beyond pixels, a chunk holds two sparse maps that action modules write through primitive events: terrain color per cell, and module-owned attributes per pixel. Absent terrain is white. See `ACTIONS.md`.
 
-A pixel has one action. `move(dx, dy)` where `dx` and `dy` are each in {-1, 0, 1} and not both zero. One move per pixel per tick.
+### Actions
 
-Rules:
+A pixel acts by submitting an action, `{ kind, params }`, where `kind` names an action module. Modules are the extension point of the world and are described in `ACTIONS.md`. The rules that hold regardless of module:
 
 - A cell holds at most one pixel.
-- A move into an occupied cell is rejected. The pixel stays where it is.
-- A move off the map edge is rejected.
+- One action per pixel per tick.
 - Actions submitted between ticks are queued and resolved at the tick in arrival order, with ties broken by ascending pixel id. Resolution is therefore deterministic.
 - A pixel with no queued action stays put.
+- A module either succeeds and its events are applied, or fails and nothing changes.
 
 Occupancy is deliberate. Collision is the first interaction the world has, and every later mechanic is built on the fact that space is contested.
 
@@ -169,8 +168,8 @@ The action interface is the only way to act on the world. It is defined by one c
 | Field        | Meaning                                   |
 | ------------ | ----------------------------------------- |
 | `pixel_id`   | The pixel being acted on                  |
-| `action`     | The action name, `move` in version one    |
-| `params`     | Action parameters, `dx` and `dy` for move |
+| `action`     | `{ kind, params }`, see `ACTIONS.md`      |
+| `at`         | Caller's last known position of the pixel, used only for routing |
 | `credential` | Proof that the caller controls this pixel |
 
 The interface validates the envelope, resolves the owning region server through the directory, routes the envelope over NATS, and returns whether the action was accepted and at which tick it will resolve.
@@ -256,25 +255,25 @@ Values fixed in the system rather than in world config, because no one creating 
 | Tile write cadence | 1 second                  | Balances freshness against object storage write volume.                                                                                                                                                              |
 | Default tick rate  | 10 per second             | Reads as motion. Gives a driver 100 milliseconds to decide. Config may override.                                                                                                                                     |
 
-## 10. Version One
+## 10. Current Scope
 
-**Included**
+**Built**
 
 - World generation from config
-- The pixel with the move action and occupancy rules
-- All nine layers as specified, each deployable and horizontally scalable
+- Pixels, terrain, and module attributes with occupancy rules
+- Action modules `move` and `mark`
+- All nine layers, each deployable and horizontally scalable
 - The random walk driver controlling every pixel
-- Free zoom and pan client with live and tile rendering
+- Free zoom and pan client with live and tile rendering, terrain drawn beneath pixels
 - Graphics settings
-- Snapshots, recovery, and replay from the log
+- Snapshots, recovery, and replay from the log, including pixels in flight between chunks
 
-**Excluded**
+**Not built**
 
-- Any action other than move
-- Any pixel attribute other than color
 - Any driver other than random walk
+- Read-only queries for drivers, such as looking at surrounding cells
 - Time scrubbing in the client, though the log supports it
 - Viewer accounts or any viewer-side state beyond graphics settings
-- Public access to the action interface beyond the reference driver
+- Authentication on the action interface beyond per-pixel credentials
 
-Everything excluded is additive. None of it requires changing anything included.
+Everything here is additive. None of it requires changing anything built.

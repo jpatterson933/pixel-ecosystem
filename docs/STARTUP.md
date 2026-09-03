@@ -1,6 +1,6 @@
 # Startup
 
-Day-to-day commands for running Pixel Ecosystem locally. Full setup and production details are in `SETUP.md`.
+Day-to-day commands for running Pixel Ecosystem locally. Installation and production details are in `SETUP.md`.
 
 ## The short version
 
@@ -16,6 +16,20 @@ Or pick a map size, `small` or `large`, from `configs/`:
 make start large
 ```
 
+Or pick which actions pixels can take. Any word that is not a size is treated as a comma-separated action list. No list means every action.
+
+```bash
+make start small move,build
+```
+
+See what actions exist, with their parameters and settings:
+
+```bash
+make actions
+```
+
+`make` reserves `--help` for itself, so use `make help` for usage.
+
 Stop everything but keep the world:
 
 ```bash
@@ -28,14 +42,14 @@ Stop everything and delete the world, its data, and its event log:
 make stop wipe
 ```
 
-`make start` builds the service image if it is missing, creates the world if it does not exist yet, writes `.env`, and brings every container up. Running it again on an existing world just restarts the containers. The rest of this file is what those two commands do by hand.
+`make start` builds the service image if it is missing, creates the world if it does not exist yet, writes `.env`, and brings every container up. Running it again with the same arguments on an existing world just restarts the containers. A different map or action list is a different world, so run `make stop wipe` first if you want to replace the current one. The rest of this file is what these commands do by hand.
 
 ## View it
 
 Open http://localhost:3000
 
 - Scroll wheel or pinch to zoom
-- Drag to pan
+- Drag to pan, or hold W, A, S, D or the arrow keys. Shift moves faster
 - Gear icon, top right, for graphics settings
 - Status bar, bottom left, shows connection, mode (live or tiles), zoom, tick, and fps
 
@@ -73,7 +87,7 @@ Start NATS:
 docker compose up -d nats
 ```
 
-Create the world. The last line printed is the world id.
+Create the world. The last line printed is the world id. Add `--actions move,build` to limit which actions are enabled.
 
 ```bash
 docker compose run --rm worldgen --config /configs/small.json --out /worlds
@@ -93,7 +107,7 @@ docker compose up -d
 
 ## Change the world
 
-Edit `configs/small.json` before running worldgen, or point `--config` at a different file. Fields: `map_width`, `map_height`, `pixel_count`, `color_count`, `tick_rate`, `seed`. Same config always produces the same world id, and worldgen refuses to recreate a world that already exists.
+Edit `configs/small.json` before running worldgen, or point `--config` at a different file. Fields: `map_width`, `map_height`, `pixel_count`, `color_count`, `tick_rate`, `seed`, and an optional `actions` map of module name to settings. Same config always produces the same world id. Running worldgen again on an existing world only rewrites the driver files.
 
 ## Rebuild after code changes
 

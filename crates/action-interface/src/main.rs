@@ -64,8 +64,8 @@ async fn world(State(r): State<Arc<Router>>) -> Json<WorldInfo> {
     })
 }
 
-async fn list_actions() -> Json<Vec<sim_core::ActionInfo>> {
-    Json(sim_core::registry().infos())
+async fn list_actions(State(r): State<Arc<Router>>) -> Json<Vec<action_interface::EnabledAction>> {
+    Json(action_interface::enabled_actions(&r.meta))
 }
 
 async fn http_actions(State(r): State<Arc<Router>>, Json(batch): Json<ActionBatch>) -> impl IntoResponse {
@@ -122,7 +122,7 @@ async fn mcp(State(r): State<Arc<Router>>, Json(req): Json<Value>) -> impl IntoR
             "serverInfo": { "name": "pixel-ecosystem", "version": env!("CARGO_PKG_VERSION") }
         })),
         "ping" => Ok(json!({})),
-        "tools/list" => Ok(json!({ "tools": tool_definitions() })),
+        "tools/list" => Ok(json!({ "tools": tool_definitions(&r) })),
         "tools/call" => tools_call(&r, &params).await,
         _ => Err((-32601, format!("method not found: {method}"))),
     };
@@ -137,10 +137,10 @@ async fn mcp(State(r): State<Arc<Router>>, Json(req): Json<Value>) -> impl IntoR
     Json(body).into_response()
 }
 
-fn tool_definitions() -> Value {
-    let mut tools: Vec<Value> = sim_core::registry()
-        .infos()
+fn tool_definitions(r: &Router) -> Value {
+    let mut tools: Vec<Value> = action_interface::enabled_actions(&r.meta)
         .into_iter()
+        .map(|a| a.info)
         .map(|info| {
             json!({
                 "name": info.name,
@@ -184,8 +184,8 @@ async fn tools_call(r: &Router, params: &Value) -> Result<Value, (i64, String)> 
             };
             Ok(text_content(&info, false))
         }
-        "list_actions" => Ok(text_content(&sim_core::registry().infos(), false)),
-        kind if sim_core::registry().get(kind).is_some() => {
+        "list_actions" => Ok(text_content(&action_interface::enabled_actions(&r.meta), false)),
+        kind if r.meta.config.action_enabled(kind) => {
             let get_i = |k: &str| args.get(k).and_then(|v| v.as_i64());
             let (Some(pixel_id), Some(x), Some(y)) = (get_i("pixel_id"), get_i("x"), get_i("y")) else {
                 return Err((-32602, "pixel_id, x, and y are required".into()));

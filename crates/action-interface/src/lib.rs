@@ -40,6 +40,10 @@ impl Router {
                 results[i] = Some(error_result(e.pixel_id, "unknown_action"));
                 continue;
             };
+            if !self.meta.config.action_enabled(module.name()) {
+                results[i] = Some(error_result(e.pixel_id, "disabled_action"));
+                continue;
+            }
             if let Err(msg) = module.validate(&e.action.params) {
                 results[i] = Some(error_result(e.pixel_id, &format!("invalid_params: {msg}")));
                 continue;
@@ -124,5 +128,26 @@ fn error_result(pixel_id: PixelId, error: &str) -> ActionResult {
         y: 0,
         reason: None,
         error: Some(error.to_string()),
+        data: None,
     }
+}
+
+/// Enabled modules only, with the world's settings for each.
+pub fn enabled_actions(meta: &WorldMeta) -> Vec<EnabledAction> {
+    sim_core::registry()
+        .infos()
+        .into_iter()
+        .filter(|i| meta.config.action_enabled(&i.name))
+        .map(|i| EnabledAction {
+            settings: meta.config.action_settings(&i.name),
+            info: i,
+        })
+        .collect()
+}
+
+#[derive(Clone, serde::Serialize)]
+pub struct EnabledAction {
+    #[serde(flatten)]
+    pub info: sim_core::ActionInfo,
+    pub settings: serde_json::Value,
 }

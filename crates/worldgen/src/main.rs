@@ -15,7 +15,7 @@ use tracing::info;
 #[command(name = "worldgen", about = "Create a Pixel Ecosystem world")]
 struct Args {
     /// Path to the world config JSON.
-    #[arg(long)]
+    #[arg(long, default_value = "configs/small.json")]
     config: PathBuf,
     /// NATS server URL.
     #[arg(long, env = "NATS_URL", default_value = "nats://localhost:4222")]
@@ -26,6 +26,13 @@ struct Args {
     /// Region server id that owns every chunk in the initial directory.
     #[arg(long, default_value = "region-0")]
     server_id: String,
+    /// Comma-separated action modules to enable. Overrides the config's `actions`.
+    /// Default: every registered module.
+    #[arg(long, value_delimiter = ',')]
+    actions: Option<Vec<String>>,
+    /// Print every registered action module and exit.
+    #[arg(long)]
+    list_actions: bool,
 }
 
 #[tokio::main]
@@ -33,10 +40,23 @@ async fn main() -> Result<()> {
     common::init_logging();
     let args = Args::parse();
 
+    if args.list_actions {
+        for info in sim_core::registry().infos() {
+            println!("{}", info.name);
+            println!("    {}", info.description);
+            println!("    params:   {}", summarize_schema(&info.schema));
+            println!("    settings: {}", serde_json::to_string(&info.default_settings)?);
+        }
+        return Ok(());
+    }
+
     let raw = std::fs::read_to_string(&args.config)
         .with_context(|| format!("reading {}", args.config.display()))?;
-    let cfg: WorldConfig = serde_json::from_str(&raw).context("parsing config")?;
+    let mut cfg: WorldConfig = serde_json::from_str(&raw).context("parsing config")?;
+    cfg.finalize_actions(args.actions.as_deref())
+        .map_err(|e| anyhow::anyhow!(e))?;
     cfg.validate().map_err(|e| anyhow::anyhow!(e))?;
+    info!(actions = ?cfg.actions.keys().collect::<Vec<_>>(), "enabled actions");
     let world_id = cfg.world_id();
     info!(world_id, "generating");
 
@@ -159,4 +179,24 @@ async fn publish_genesis(
     info!(chunks = chunk_count, "genesis published");
 
     Ok(())
+}
+
+fn summarize_schema(schema: &serde_json::Value) -> String {
+    let Some(props) = schema.get("properties").and_then(|p| p.as_object()) else {
+        return "none".into();
+    };
+    if props.is_empty() {
+        return "none".into();
+    }
+    props
+        .iter()
+        .map(|(k, v)| {
+            let ty = v
+                .get("type")
+                .map(|t| t.to_string().replace('"', ""))
+                .unwrap_or_else(|| "any".into());
+            format!("{k}: {ty}")
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }

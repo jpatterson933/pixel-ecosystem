@@ -1,10 +1,13 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::{ChunkCoord, CHUNK_SIZE};
 
 /// The immutable definition of a world. Same config, same world.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WorldConfig {
     pub map_width: u32,
     pub map_height: u32,
@@ -13,6 +16,10 @@ pub struct WorldConfig {
     #[serde(default = "default_tick_rate")]
     pub tick_rate: u32,
     pub seed: u64,
+    /// Enabled action modules and their world-level settings. Absent means every
+    /// registered module with default settings; `finalize_actions` fills it in.
+    #[serde(default)]
+    pub actions: BTreeMap<String, Value>,
 }
 
 fn default_tick_rate() -> u32 {
@@ -22,14 +29,16 @@ fn default_tick_rate() -> u32 {
 impl WorldConfig {
     /// World identity: first 16 hex chars of the SHA-256 of the canonical config.
     pub fn world_id(&self) -> String {
+        let actions = serde_json::to_string(&self.actions).unwrap_or_default();
         let canonical = format!(
-            "{}|{}|{}|{}|{}|{}",
+            "{}|{}|{}|{}|{}|{}|{}",
             self.map_width,
             self.map_height,
             self.pixel_count,
             self.color_count,
             self.tick_rate,
-            self.seed
+            self.seed,
+            actions
         );
         let digest = Sha256::digest(canonical.as_bytes());
         hex::encode(&digest[..8])
@@ -49,7 +58,52 @@ impl WorldConfig {
         if self.tick_rate == 0 || self.tick_rate > 1000 {
             return Err("tick_rate must be in 1..=1000".into());
         }
+        for (name, settings) in &self.actions {
+            let Some(module) = crate::registry().get(name) else {
+                return Err(format!("unknown action module: {name}"));
+            };
+            module
+                .validate_settings(settings)
+                .map_err(|e| format!("bad settings for action {name}: {e}"))?;
+        }
         Ok(())
+    }
+
+    /// Resolve the enabled action set. `only` restricts to the given names; otherwise
+    /// an empty map becomes every registered module. Missing settings get defaults,
+    /// and given settings are merged over defaults so partial settings work.
+    pub fn finalize_actions(&mut self, only: Option<&[String]>) -> Result<(), String> {
+        let reg = crate::registry();
+        let names: Vec<String> = match only {
+            Some(list) => list.to_vec(),
+            None if self.actions.is_empty() => reg.names().iter().map(|n| n.to_string()).collect(),
+            None => self.actions.keys().cloned().collect(),
+        };
+        let mut out = BTreeMap::new();
+        for name in names {
+            let Some(module) = reg.get(&name) else {
+                return Err(format!("unknown action module: {name}"));
+            };
+            let mut settings = module.default_settings();
+            if let (Value::Object(base), Some(Value::Object(given))) = (&settings, self.actions.get(&name)) {
+                let mut merged = base.clone();
+                for (k, v) in given {
+                    merged.insert(k.clone(), v.clone());
+                }
+                settings = Value::Object(merged);
+            }
+            out.insert(name, settings);
+        }
+        self.actions = out;
+        Ok(())
+    }
+
+    pub fn action_enabled(&self, name: &str) -> bool {
+        self.actions.contains_key(name)
+    }
+
+    pub fn action_settings(&self, name: &str) -> Value {
+        self.actions.get(name).cloned().unwrap_or(Value::Object(Default::default()))
     }
 
     pub fn chunks_x(&self) -> u32 {

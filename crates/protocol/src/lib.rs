@@ -184,6 +184,9 @@ pub struct ActionResult {
     pub reason: Option<RejectReason>,
     /// Routing or auth failure before the world saw the action.
     pub error: Option<String>,
+    /// Module-provided payload, such as build progress.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -119,13 +119,14 @@ pub enum RejectReason {
     OffMap,
     NotFound,
     UnknownAction,
+    DisabledAction,
     InvalidParams,
     /// Module-specific rule refused the action.
     Refused,
 }
 
 /// Per-action outcome, returned to the submitter.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Outcome {
     pub seq: u64,
     pub pixel_id: PixelId,
@@ -133,4 +134,7 @@ pub struct Outcome {
     pub x: u32,
     pub y: u32,
     pub reason: Option<RejectReason>,
+    /// Module-provided payload for the driver, such as build progress.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<Value>,
 }

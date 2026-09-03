@@ -1,27 +1,8 @@
 # Setup
 
-What you need to install, provision, and configure to run Pixel Ecosystem locally and in production. The architecture itself is in `PROPOSAL.md`.
+What you need to install, provision, and configure to run Pixel Ecosystem locally and in production. Day-to-day commands are in `STARTUP.md`. The architecture is in `ARCHITECTURE.md`.
 
-## 1. Repository layout
-
-```
-crates/sim-core          Rules of the world. Pure Rust library, also compiles to WASM.
-crates/protocol          Wire formats, NATS subject names, credentials.
-crates/common            Logging, NATS connection, world metadata, object store setup.
-crates/sim-wasm          wasm-bindgen wrapper around sim-core for the browser.
-crates/worldgen          Creates a world from a config file.
-crates/region-server     Owns chunks, ticks them, appends events to the log.
-crates/action-interface  The one way to act on the world. HTTP, WebSocket, MCP adapters.
-crates/driver-random     Reference driver. Moves every pixel randomly every tick.
-crates/gateway           Fans live chunk events out to browsers over WebSocket.
-crates/summary-service   Maintains the tile pyramid and writes tiles to object storage.
-client/                  Browser viewer. Vite, React, PixiJS.
-configs/                 Example world configs.
-deploy/                  Dockerfiles and Kubernetes manifests.
-docker-compose.yml       Runs everything locally.
-```
-
-## 2. Local prerequisites
+## 1. Local prerequisites
 
 | Tool                      | Version               | Purpose                                              |
 | ------------------------- | --------------------- | ---------------------------------------------------- |
@@ -42,11 +23,11 @@ Install wasm-pack (optional):
 cargo install wasm-pack
 ```
 
-## 3. Fastest local run: Docker Compose
+## 2. Fastest local run: Docker Compose
 
 Everything runs in containers. The client is served on port 3000.
 
-The Makefile wraps the whole sequence below: `make start small`, `make start large`, `make stop`, `make stop wipe`. See `STARTUP.md`. The manual steps:
+The Makefile wraps the whole sequence below. See `STARTUP.md`. The manual steps:
 
 Start NATS:
 
@@ -93,7 +74,7 @@ Ports:
 
 Local state lives in `./data` (snapshots and tiles), `./worlds` (driver credentials and genesis), and the `nats-data` Docker volume (the event log). Deleting all three and re-running worldgen gives you a fresh world.
 
-## 4. Local run without containers for the services
+## 3. Local run without containers for the services
 
 Use this when iterating on Rust code. NATS still runs in Docker.
 
@@ -141,7 +122,7 @@ cd client && npm install && npm run dev
 
 The client defaults to `http://localhost:8080` for the gateway and `http://localhost:8082` for tiles. Override with `VITE_GATEWAY_URL` and `VITE_TILE_BASE_URL` in `client/.env`.
 
-## 5. World configuration
+## 4. World configuration
 
 A world is one JSON file. See `configs/small.json` and `configs/large.json`.
 
@@ -152,12 +133,19 @@ A world is one JSON file. See `configs/small.json` and `configs/large.json`.
 | `color_count`             | Unique colors generated, 1 to 16,777,216        |
 | `tick_rate`               | Ticks per second, 1 to 1000. Default 10         |
 | `seed`                    | 64-bit integer. All randomness descends from it |
+| `actions` | Optional map of action module name to its settings. Absent means every registered module with default settings. A different set is a different world |
 
 The world id is a hash of these fields. Running worldgen twice with the same config produces the same id. The second run leaves the existing world untouched and only rewrites the driver files.
 
+Action settings are per module. `make actions` or `worldgen --list-actions` prints each module's defaults. To enable only move and build with a higher build rate:
+
+```json
+"actions": { "move": {}, "build": { "build_chance": 0.002 } }
+```
+
 `worldgen` writes `worlds/<id>/config.json`, `worlds/<id>/driver.json` (the secret that derives every pixel's control token), and `worlds/<id>/genesis.json` (every pixel's starting position). The driver needs all three. Treat `driver.json` as a secret.
 
-## 6. Service environment variables
+## 5. Service environment variables
 
 Every service accepts these as flags or environment variables.
 
@@ -169,10 +157,13 @@ Every service accepts these as flags or environment variables.
 | `STORE`                                                     | region-server, summary-service             | `local:<dir>` or `r2:<bucket>`                               |
 | `BIND`                                                      | action-interface, gateway, summary-service | Listen address                                               |
 | `INTERFACE_URL`                                             | driver-random                              | WebSocket adapter of the action interface                    |
+| `MARK_CHANCE` | driver-random | Probability per wandering pixel per tick of sending `mark` instead of `move`. Default 0 |
+| `BUILD_CHANCE` | driver-random | Overrides the world's `build.build_chance` setting |
+| `BLUEPRINT` | driver-random | Blueprint the driver builds. Default `boundary_fence` |
 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `R2_ENDPOINT` | anything with `STORE=r2:`                  | R2 credentials                                               |
 | `RUST_LOG`                                                  | all                                        | Log filter, default `info`                                   |
 
-## 7. Production: what to provision
+## 6. Production: what to provision
 
 ### Cloudflare
 
@@ -217,9 +208,9 @@ kubectl apply -f deploy/k8s/10-config.yaml -f deploy/k8s/50-region-server.yaml -
 
 Ownership lives in the NATS key-value bucket `pe_<world id>` under the key `directory`. It is a JSON document of Hilbert index ranges to server ids. To add a region server, scale the StatefulSet so a pod with a new `SERVER_ID` exists, then rewrite the directory to split a range and assign part of it to the new id. Both servers reload chunks from snapshots and the log on restart. A single server owning the full range is the default that worldgen writes.
 
-## 8. Using the action interface directly
+## 7. Using the action interface directly
 
-List the actions the world supports, with parameter schemas:
+List the actions enabled in this world, with parameter schemas and settings:
 
 ```bash
 curl -s localhost:8081/actions
@@ -235,17 +226,11 @@ A pixel's credential is the first 32 hex characters of HMAC-SHA256 keyed by the 
 
 MCP: point an MCP client at `http://<action interface>/mcp` using the Streamable HTTP transport. There is one tool per action module, named after the module, plus `world_info` and `list_actions`.
 
-## 9. Adding an action
+## 8. Adding an action
 
-Actions are modules in `crates/sim-core/src/actions/`. See `PROPOSAL-ACTIONS.md` for the design.
+Actions are modules in `crates/sim-core/src/actions/`. See `ACTIONS.md`.
 
-1. Create `crates/sim-core/src/actions/<name>.rs` with a params struct deriving `Deserialize` and `JsonSchema`, and a type implementing `Module` with `NAME`, `DESCRIPTION`, `Params`, and `resolve`.
-2. Add `pub mod <name>;` and one `Box::new(<name>::<Type>)` line in `crates/sim-core/src/actions/mod.rs`.
-3. Rebuild.
-
-The module acts only through `ActionContext`: `move_to`, `set_cell`, `set_attribute`, and the read methods. Validation, the HTTP listing, and the MCP tool come from the params struct automatically. Nothing outside sim-core changes.
-
-## 10. Building the WASM simulation core
+## 9. Building the WASM simulation core
 
 The client does not require it in this version, since a viewer submits no actions and therefore has nothing to predict. To build it anyway:
 
@@ -253,7 +238,7 @@ The client does not require it in this version, since a viewer submits no action
 cd crates/sim-wasm && wasm-pack build --target web
 ```
 
-## 11. Things to know
+## 10. Things to know
 
 - The client's prediction toggle is wired but has no effect until the client is also a driver.
 - Cross-server pixel handoffs travel over core NATS, not the durable log. If a region server dies in the same tick a pixel crosses to it from another server, that pixel is lost. Single-server deployments have no such window.

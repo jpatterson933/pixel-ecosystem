@@ -459,6 +459,7 @@ impl Server {
                         y: o.y,
                         reason: o.reason,
                         error: None,
+                        data: o.data,
                     });
                     break;
                 }
@@ -547,6 +548,7 @@ fn error_result(pixel_id: PixelId, error: &str) -> ActionResult {
         y: 0,
         reason: None,
         error: Some(error.to_string()),
+        data: None,
     }
 }
 

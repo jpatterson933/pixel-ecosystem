@@ -40,7 +40,12 @@ interface PointerPos {
 
 const WORLD_RETRY_MAX_MS = 10000
 
+/** Screen pixels per second when panning with the keyboard. Shift triples it. */
+const KEY_PAN_SPEED = 600
+const PAN_KEYS = new Set(['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright', 'shift'])
+
 export class Renderer {
+  private readonly keys = new Set<string>()
   prediction = DEFAULT_SETTINGS.prediction
 
   private readonly app = new Application()
@@ -241,18 +246,54 @@ export class Renderer {
       const p = local(e)
       this.viewport.zoomAt(p.x, p.y, Math.exp(-dy * rate))
     }
+    const isTyping = (e: KeyboardEvent): boolean => {
+      const t = e.target as HTMLElement | null
+      return !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)
+    }
+    const onKeyDown = (e: KeyboardEvent): void => {
+      if (isTyping(e) || e.metaKey || e.ctrlKey || e.altKey) return
+      const k = e.key.toLowerCase()
+      if (PAN_KEYS.has(k)) {
+        this.keys.add(k)
+        e.preventDefault()
+      }
+    }
+    const onKeyUp = (e: KeyboardEvent): void => {
+      this.keys.delete(e.key.toLowerCase())
+    }
+    const onBlur = (): void => this.keys.clear()
     canvas.addEventListener('pointerdown', onDown)
     canvas.addEventListener('pointermove', onMove)
     canvas.addEventListener('pointerup', onUp)
     canvas.addEventListener('pointercancel', onUp)
     canvas.addEventListener('wheel', onWheel, { passive: false })
+    window.addEventListener('keydown', onKeyDown)
+    window.addEventListener('keyup', onKeyUp)
+    window.addEventListener('blur', onBlur)
     this.unbind.push(
       () => canvas.removeEventListener('pointerdown', onDown),
       () => canvas.removeEventListener('pointermove', onMove),
       () => canvas.removeEventListener('pointerup', onUp),
       () => canvas.removeEventListener('pointercancel', onUp),
       () => canvas.removeEventListener('wheel', onWheel),
+      () => window.removeEventListener('keydown', onKeyDown),
+      () => window.removeEventListener('keyup', onKeyUp),
+      () => window.removeEventListener('blur', onBlur),
     )
+  }
+
+  private applyKeyPan(dtMs: number): void {
+    if (this.keys.size === 0) return
+    let dx = 0
+    let dy = 0
+    if (this.keys.has('w') || this.keys.has('arrowup')) dy += 1
+    if (this.keys.has('s') || this.keys.has('arrowdown')) dy -= 1
+    if (this.keys.has('a') || this.keys.has('arrowleft')) dx += 1
+    if (this.keys.has('d') || this.keys.has('arrowright')) dx -= 1
+    if (dx === 0 && dy === 0) return
+    const speed = (this.keys.has('shift') ? KEY_PAN_SPEED * 3 : KEY_PAN_SPEED) * (dtMs / 1000)
+    const len = Math.hypot(dx, dy)
+    this.viewport.panBy((dx / len) * speed, (dy / len) * speed)
   }
 
   private readonly frame = (now: number): void => {
@@ -260,7 +301,9 @@ export class Renderer {
     this.raf = requestAnimationFrame(this.frame)
     const minInterval = 1000 / this.settings.frameRateCap
     if (now - this.lastFrameAt < minInterval * 0.9) return
+    const dt = this.lastFrameAt > 0 ? Math.min(now - this.lastFrameAt, 100) : 0
     this.lastFrameAt = now
+    this.applyKeyPan(dt)
 
     this.fpsFrames++
     const fpsElapsed = now - this.fpsWindowStart

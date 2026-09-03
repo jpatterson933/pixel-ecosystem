@@ -1,6 +1,8 @@
-//! Reference driver: every tick, move every pixel it controls in a random direction.
+//! Reference driver. Pixels wander randomly; if `build` is enabled, each wandering
+//! pixel starts a build with the world's `build_chance` per tick and then stays put,
+//! sending `build` every tick to construct and then guard its structure.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -10,6 +12,7 @@ use clap::Parser;
 use futures::{SinkExt, StreamExt};
 use protocol::{ActionClientMessage, ActionServerMessage, DriverFile, Envelope};
 use rand::{Rng, SeedableRng};
+use serde_json::json;
 use sim_core::{Action, Pixel, PixelId, RejectReason, WorldConfig};
 use tokio::sync::Mutex;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
@@ -27,9 +30,15 @@ struct Args {
     /// Envelopes per WebSocket message.
     #[arg(long, default_value_t = 2000)]
     batch_size: usize,
-    /// Probability per pixel per tick of sending `mark` instead of `move`.
+    /// Probability per wandering pixel per tick of sending `mark` instead of `move`.
     #[arg(long, env = "MARK_CHANCE", default_value_t = 0.0)]
     mark_chance: f64,
+    /// Override the world's `build_chance` setting.
+    #[arg(long, env = "BUILD_CHANCE")]
+    build_chance: Option<f64>,
+    /// Blueprint to build.
+    #[arg(long, env = "BLUEPRINT", default_value = "boundary_fence")]
+    blueprint: String,
 }
 
 const DIRS: [(i8, i8); 8] = [
@@ -43,6 +52,19 @@ const DIRS: [(i8, i8); 8] = [
     (1, 1),
 ];
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    Wander,
+    Building,
+    Done,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PState {
+    at: [u32; 2],
+    mode: Mode,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     common::init_logging();
@@ -53,14 +75,45 @@ async fn main() -> Result<()> {
     let genesis: Vec<Pixel> = read_json(&args.world_dir.join("genesis.json"))?;
     let secret = hex::decode(driver.secret.trim())?;
 
+    let enabled: HashSet<String> = cfg.actions.keys().cloned().collect();
+    let can_move = enabled.contains("move");
+    let can_mark = enabled.contains("mark") && args.mark_chance > 0.0;
+    let build_chance = args.build_chance.unwrap_or_else(|| {
+        cfg.action_settings("build")
+            .get("build_chance")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0)
+    });
+    let can_build = enabled.contains("build") && build_chance > 0.0;
+
     let tokens: HashMap<PixelId, String> = genesis
         .iter()
         .map(|p| (p.id, protocol::pixel_token(&secret, p.id)))
         .collect();
-    let positions: Arc<Mutex<HashMap<PixelId, [u32; 2]>>> = Arc::new(Mutex::new(
-        genesis.iter().map(|p| (p.id, [p.x, p.y])).collect(),
+    let states: Arc<Mutex<HashMap<PixelId, PState>>> = Arc::new(Mutex::new(
+        genesis
+            .iter()
+            .map(|p| {
+                (
+                    p.id,
+                    PState {
+                        at: [p.x, p.y],
+                        mode: Mode::Wander,
+                    },
+                )
+            })
+            .collect(),
     ));
-    info!(world = %driver.world_id, pixels = tokens.len(), "driver loaded");
+    info!(
+        world = %driver.world_id,
+        pixels = tokens.len(),
+        ?enabled,
+        can_move,
+        can_mark,
+        can_build,
+        build_chance,
+        "driver loaded"
+    );
 
     let mut rng = rand::rngs::StdRng::from_entropy();
     let interval = Duration::from_millis(cfg.tick_interval_ms());
@@ -77,16 +130,42 @@ async fn main() -> Result<()> {
         info!(url = %args.interface, "connected");
         let (mut tx, mut rx) = ws.split();
 
-        let pos_reader = positions.clone();
+        let states_reader = states.clone();
         let reader = tokio::spawn(async move {
+            let mut standing: HashSet<PixelId> = HashSet::new();
             while let Some(Ok(msg)) = rx.next().await {
                 let Message::Text(text) = msg else { continue };
                 match serde_json::from_str::<ActionServerMessage>(&text) {
                     Ok(ActionServerMessage::Results { results }) => {
-                        let mut pos = pos_reader.lock().await;
+                        let mut st = states_reader.lock().await;
                         for r in results {
+                            let Some(s) = st.get_mut(&r.pixel_id) else { continue };
                             if r.accepted || (r.reason.is_some() && r.reason != Some(RejectReason::NotFound)) {
-                                pos.insert(r.pixel_id, [r.x, r.y]);
+                                s.at = [r.x, r.y];
+                            }
+                            if s.mode != Mode::Building {
+                                continue;
+                            }
+                            let gave_up = r.error.is_some()
+                                || matches!(
+                                    r.reason,
+                                    Some(RejectReason::Refused)
+                                        | Some(RejectReason::InvalidParams)
+                                        | Some(RejectReason::DisabledAction)
+                                        | Some(RejectReason::UnknownAction)
+                                );
+                            if gave_up {
+                                s.mode = Mode::Wander;
+                                continue;
+                            }
+                            let status = r.data.as_ref().and_then(|d| d.get("status")).and_then(|v| v.as_str());
+                            let progress = r.data.as_ref().and_then(|d| d.get("progress")).and_then(|v| v.as_u64());
+                            let total = r.data.as_ref().and_then(|d| d.get("total")).and_then(|v| v.as_u64());
+                            if status == Some("done") && progress == total && r.accepted {
+                                s.mode = Mode::Done;
+                                if standing.insert(r.pixel_id) {
+                                    info!(pixel = r.pixel_id, standing = standing.len(), "structure complete");
+                                }
                             }
                         }
                     }
@@ -101,34 +180,50 @@ async fn main() -> Result<()> {
         let mut disconnected = false;
         while !disconnected {
             ticker.tick().await;
-            let snapshot: Vec<(PixelId, [u32; 2])> = {
-                let pos = positions.lock().await;
-                pos.iter().map(|(id, p)| (*id, *p)).collect()
+            let snapshot: Vec<(PixelId, PState)> = {
+                let mut st = states.lock().await;
+                let mut out = Vec::with_capacity(st.len());
+                for (id, s) in st.iter_mut() {
+                    if s.mode == Mode::Wander && can_build && rng.gen_bool(build_chance) {
+                        s.mode = Mode::Building;
+                    }
+                    out.push((*id, *s));
+                }
+                out
             };
             for chunk in snapshot.chunks(args.batch_size) {
                 let envelopes: Vec<Envelope> = chunk
                     .iter()
-                    .map(|(id, at)| {
-                        let action = if args.mark_chance > 0.0 && rng.gen_bool(args.mark_chance) {
-                            Action {
+                    .filter_map(|(id, s)| {
+                        let action = match s.mode {
+                            Mode::Building => Action {
+                                kind: "build".into(),
+                                params: json!({ "blueprint": args.blueprint }),
+                            },
+                            Mode::Wander if can_mark && rng.gen_bool(args.mark_chance) => Action {
                                 kind: "mark".into(),
-                                params: serde_json::json!({}),
+                                params: json!({}),
+                            },
+                            Mode::Wander if can_move => {
+                                let (dx, dy) = DIRS[rng.gen_range(0..DIRS.len())];
+                                Action {
+                                    kind: "move".into(),
+                                    params: json!({ "dx": dx, "dy": dy }),
+                                }
                             }
-                        } else {
-                            let (dx, dy) = DIRS[rng.gen_range(0..DIRS.len())];
-                            Action {
-                                kind: "move".into(),
-                                params: serde_json::json!({ "dx": dx, "dy": dy }),
-                            }
+                            Mode::Wander | Mode::Done => return None,
                         };
-                        Envelope {
+                        Some(Envelope {
                             pixel_id: *id,
                             action,
-                            at: *at,
+                            at: s.at,
                             credential: tokens.get(id).cloned().unwrap_or_default(),
-                        }
+                        })
                     })
                     .collect();
+                if envelopes.is_empty() {
+                    continue;
+                }
                 let msg = ActionClientMessage::Actions { envelopes };
                 let text = serde_json::to_string(&msg)?;
                 if tx.send(Message::Text(text)).await.is_err() {
