@@ -3,8 +3,9 @@
 //! The builder stands at the blueprint's center and stays there. Each `build` call
 //! places the next cell in the builder's color. While a structure is unfinished, any
 //! other pixel inside its footprint clears everything placed so far and the build
-//! starts over. A finished structure is permanent. A new structure may not overlap
-//! another structure's footprint or be placed over existing terrain.
+//! starts over. A finished structure is permanent and impassable: its walls are solid
+//! and its interior is sealed. A new structure may not overlap another structure's
+//! footprint or be placed over existing terrain.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -23,7 +24,7 @@ pub struct Params {
 }
 
 fn default_blueprint() -> String {
-    "boundary_fence".into()
+    "boundary_wall".into()
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -54,7 +55,7 @@ pub struct Blueprint {
 }
 
 pub fn blueprints() -> Vec<Blueprint> {
-    vec![boundary_fence()]
+    vec![boundary_wall()]
 }
 
 pub fn blueprint(name: &str) -> Option<Blueprint> {
@@ -62,7 +63,7 @@ pub fn blueprint(name: &str) -> Option<Blueprint> {
 }
 
 /// 5 by 5 ring of 16 cells with the builder in the center.
-fn boundary_fence() -> Blueprint {
+fn boundary_wall() -> Blueprint {
     let mut cells = Vec::with_capacity(16);
     let mut footprint = Vec::with_capacity(25);
     for dy in -2i32..=2 {
@@ -74,7 +75,7 @@ fn boundary_fence() -> Blueprint {
         }
     }
     Blueprint {
-        name: "boundary_fence",
+        name: "boundary_wall",
         cells,
         footprint,
     }
@@ -90,7 +91,7 @@ struct State {
 
 impl Module for Build {
     const NAME: &'static str = "build";
-    const DESCRIPTION: &'static str = "Build a structure from a blueprint around the pixel, one cell per call, in the pixel's color. While unfinished, any other pixel inside the footprint destroys the work and it restarts. Finished structures are permanent. A new structure cannot overlap another structure's footprint or existing terrain.";
+    const DESCRIPTION: &'static str = "Build a structure from a blueprint around the pixel, one cell per call, in the pixel's color. While unfinished, any other pixel inside the footprint destroys the work and it restarts. Finished structures are permanent and cannot be entered. A new structure cannot overlap another structure's footprint or existing terrain.";
     type Params = Params;
     type Settings = Settings;
 
@@ -162,7 +163,7 @@ impl Module for Build {
                     return Err(RejectReason::Refused);
                 }
             }
-            if bp.cells.iter().any(|(dx, dy)| ctx.terrain(ox + *dx as i64, oy + *dy as i64).is_some()) {
+            if bp.footprint.iter().any(|(dx, dy)| ctx.has_terrain(ox + *dx as i64, oy + *dy as i64)) {
                 return Err(RejectReason::Refused);
             }
         }
@@ -203,9 +204,15 @@ impl Module for Build {
         }
 
         let (dx, dy) = bp.cells[st.progress];
-        ctx.set_cell(ox + dx as i64, oy + dy as i64, Some(pixel.color))?;
+        ctx.set_cell_solid(ox + dx as i64, oy + dy as i64, Some(pixel.color), true)?;
         st.progress += 1;
         st.done = st.progress >= total;
+        if st.done {
+            // Seal the interior so nothing can be displaced into it.
+            for (dx, dy) in bp.footprint.iter().filter(|c| !bp.cells.contains(c)) {
+                ctx.set_cell_solid(ox + *dx as i64, oy + *dy as i64, None, true)?;
+            }
+        }
         ctx.set_attribute(pixel.id, "state", serde_json::to_value(&st).unwrap_or(Value::Null))?;
         ctx.reply(json!({
             "status": if st.done { "done" } else { "building" },

@@ -25,7 +25,8 @@ export interface PixelState {
 export interface CellState {
   x: number
   y: number
-  color: Rgba
+  color: Rgba | null
+  solid?: boolean
 }
 
 export type PixelEvent =
@@ -33,7 +34,7 @@ export type PixelEvent =
   | { t: 'arrived'; id: number; x: number; y: number; color: Rgba }
   | { t: 'moved'; id: number; from: [number, number]; to: [number, number] }
   | { t: 'departed'; id: number; from: [number, number]; to: [number, number] }
-  | { t: 'cell_set'; x: number; y: number; color: Rgba | null }
+  | { t: 'cell_set'; x: number; y: number; color: Rgba | null; solid?: boolean }
   | { t: 'attribute_set'; id: number; module: string; key: string; value: unknown }
   | { t: 'config'; config: WorldConfig }
 

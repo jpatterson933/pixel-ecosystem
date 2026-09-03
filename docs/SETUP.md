@@ -159,7 +159,7 @@ Every service accepts these as flags or environment variables.
 | `INTERFACE_URL`                                             | driver-random                              | WebSocket adapter of the action interface                    |
 | `MARK_CHANCE` | driver-random | Probability per wandering pixel per tick of sending `mark` instead of `move`. Default 0 |
 | `BUILD_CHANCE` | driver-random | Overrides the world's `build.build_chance` setting |
-| `BLUEPRINT` | driver-random | Blueprint the driver builds. Default `boundary_fence` |
+| `BLUEPRINT` | driver-random | Blueprint the driver builds. Default `boundary_wall` |
 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `R2_ENDPOINT` | anything with `STORE=r2:`                  | R2 credentials                                               |
 | `RUST_LOG`                                                  | all                                        | Log filter, default `info`                                   |
 

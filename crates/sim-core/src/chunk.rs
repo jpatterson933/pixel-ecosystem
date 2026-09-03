@@ -16,8 +16,8 @@ pub struct Chunk {
     pub pixels: HashMap<PixelId, Pixel>,
     /// Cell (x, y) in map coordinates to the pixel occupying it.
     pub occupancy: HashMap<(u32, u32), PixelId>,
-    /// Terrain color per cell. Absent means white.
-    pub cells: HashMap<(u32, u32), Rgba>,
+    /// Terrain per cell. Absent means white and passable.
+    pub cells: HashMap<(u32, u32), Cell>,
     /// Module-owned per-pixel state.
     pub attributes: HashMap<PixelId, Attributes>,
 }
@@ -33,11 +33,27 @@ struct ChunkRepr {
     attributes: Vec<(PixelId, Attributes)>,
 }
 
+/// Terrain state of one cell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct Cell {
+    pub color: Option<Rgba>,
+    #[serde(default)]
+    pub solid: bool,
+}
+
+impl Cell {
+    pub fn is_clear(&self) -> bool {
+        self.color.is_none() && !self.solid
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CellEntry {
     pub x: u32,
     pub y: u32,
-    pub color: Rgba,
+    pub color: Option<Rgba>,
+    #[serde(default)]
+    pub solid: bool,
 }
 
 impl From<ChunkRepr> for Chunk {
@@ -47,7 +63,13 @@ impl From<ChunkRepr> for Chunk {
             c.insert(p);
         }
         for e in r.cells {
-            c.cells.insert((e.x, e.y), e.color);
+            c.cells.insert(
+                (e.x, e.y),
+                Cell {
+                    color: e.color,
+                    solid: e.solid,
+                },
+            );
         }
         for (id, a) in r.attributes {
             c.attributes.insert(id, a);
@@ -64,7 +86,12 @@ impl From<Chunk> for ChunkRepr {
             cells: c
                 .cells
                 .into_iter()
-                .map(|((x, y), color)| CellEntry { x, y, color })
+                .map(|((x, y), cell)| CellEntry {
+                    x,
+                    y,
+                    color: cell.color,
+                    solid: cell.solid,
+                })
                 .collect(),
             attributes: c.attributes.into_iter().collect(),
         }
@@ -106,10 +133,11 @@ impl Chunk {
     pub fn cell_entries(&self) -> Vec<CellEntry> {
         self.cells
             .iter()
-            .map(|((x, y), color)| CellEntry {
+            .map(|((x, y), cell)| CellEntry {
                 x: *x,
                 y: *y,
-                color: *color,
+                color: cell.color,
+                solid: cell.solid,
             })
             .collect()
     }
@@ -167,14 +195,17 @@ impl Chunk {
                 self.remove(*id);
                 self.attributes.remove(id);
             }
-            Event::CellSet { x, y, color } => match color {
-                Some(c) => {
-                    self.cells.insert((*x, *y), *c);
-                }
-                None => {
+            Event::CellSet { x, y, color, solid } => {
+                let cell = Cell {
+                    color: *color,
+                    solid: *solid,
+                };
+                if cell.is_clear() {
                     self.cells.remove(&(*x, *y));
+                } else {
+                    self.cells.insert((*x, *y), cell);
                 }
-            },
+            }
             Event::AttributeSet {
                 id,
                 module,
@@ -310,7 +341,7 @@ impl Chunk {
                         continue;
                     }
                     let c = (nx as u32, ny as u32);
-                    if !self.occupancy.contains_key(&c) {
+                    if !self.occupancy.contains_key(&c) && !self.cells.get(&c).is_some_and(|cell| cell.solid) {
                         return Some(c);
                     }
                 }

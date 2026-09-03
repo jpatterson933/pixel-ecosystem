@@ -269,7 +269,17 @@ impl<'a> ActionContext<'a> {
         if !self.in_chunk(x, y) {
             return None;
         }
-        self.chunk.cells.get(&(x as u32, y as u32)).copied()
+        self.chunk.cells.get(&(x as u32, y as u32)).and_then(|c| c.color)
+    }
+
+    /// Whether a cell in this chunk has any terrain at all, colored or solid.
+    pub fn has_terrain(&self, x: i64, y: i64) -> bool {
+        self.in_chunk(x, y) && self.chunk.cells.contains_key(&(x as u32, y as u32))
+    }
+
+    /// Whether a cell is solid terrain that blocks movement.
+    pub fn solid(&self, x: i64, y: i64) -> bool {
+        self.in_chunk(x, y) && self.chunk.cells.get(&(x as u32, y as u32)).is_some_and(|c| c.solid)
     }
 
     /// This module's attribute on a pixel in this chunk.
@@ -305,6 +315,9 @@ impl<'a> ActionContext<'a> {
             if self.chunk.occupancy.contains_key(&(nx, ny)) {
                 return Err(RejectReason::Occupied);
             }
+            if self.chunk.cells.get(&(nx, ny)).is_some_and(|c| c.solid) {
+                return Err(RejectReason::Blocked);
+            }
             self.events.push(Event::Moved {
                 id: self.pixel.id,
                 from,
@@ -332,8 +345,14 @@ impl<'a> ActionContext<'a> {
         Ok(())
     }
 
-    /// Set or clear terrain at a cell in this chunk.
+    /// Set passable terrain at a cell in this chunk, or clear it with `None`.
     pub fn set_cell(&mut self, x: i64, y: i64, color: Option<Rgba>) -> Result<(), RejectReason> {
+        self.set_cell_solid(x, y, color, false)
+    }
+
+    /// Set terrain at a cell in this chunk. `solid` blocks movement into the cell.
+    /// `None` color with `solid: false` clears the cell.
+    pub fn set_cell_solid(&mut self, x: i64, y: i64, color: Option<Rgba>, solid: bool) -> Result<(), RejectReason> {
         if !self.in_chunk(x, y) {
             return Err(RejectReason::OffMap);
         }
@@ -341,6 +360,7 @@ impl<'a> ActionContext<'a> {
             x: x as u32,
             y: y as u32,
             color,
+            solid,
         });
         Ok(())
     }

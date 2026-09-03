@@ -37,7 +37,7 @@ struct Args {
     #[arg(long, env = "BUILD_CHANCE")]
     build_chance: Option<f64>,
     /// Blueprint to build.
-    #[arg(long, env = "BLUEPRINT", default_value = "boundary_fence")]
+    #[arg(long, env = "BLUEPRINT", default_value = "boundary_wall")]
     blueprint: String,
 }
 

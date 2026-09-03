@@ -26,10 +26,10 @@ The whole vocabulary.
 | `moved` | Pixel changed cell within a chunk |
 | `departed` | Pixel left this chunk for a cell in another |
 | `arrived` | Pixel entered this chunk |
-| `cell_set` | A cell's terrain color changed, or was cleared |
+| `cell_set` | A cell's terrain changed: a color, whether it is solid, or cleared |
 | `attribute_set` | A per-pixel attribute owned by a module changed |
 
-`cell_set` is what makes roads, houses, trails, and territory possible. It colors the map itself, beneath pixels. `attribute_set` is how modules give pixels state such as energy, inventory, or allegiance, without touching the core pixel struct.
+`cell_set` is what makes roads, houses, trails, and territory possible. It colors the map itself, beneath pixels, and can mark a cell solid so nothing can move into it. `attribute_set` is how modules give pixels state such as energy, inventory, or allegiance, without touching the core pixel struct.
 
 Any future primitive, for example a `said` event for speech, is a deliberate, rare addition that touches consumers once.
 
@@ -79,8 +79,10 @@ The only surface a module has. It is scoped to the chunk the pixel is in, so a m
 | `settings()` | This module's world-level settings, typed |
 | `cell_in_chunk(x, y)` | Whether a cell is inside this chunk and the map |
 | `reply(value)` | Payload returned to the driver in the action result's `data` field |
-| `move_to(x, y)` | Move the acting pixel one cell. Handles same-chunk moves and cross-chunk departures. Fails with `occupied` or `off_map` |
-| `set_cell(x, y, color)` | Set or clear terrain at a cell in this chunk |
+| `move_to(x, y)` | Move the acting pixel one cell. Handles same-chunk moves and cross-chunk departures. Fails with `occupied`, `blocked`, or `off_map` |
+| `set_cell(x, y, color)` | Set or clear passable terrain at a cell in this chunk |
+| `set_cell_solid(x, y, color, solid)` | Same, with control over whether the cell blocks movement |
+| `has_terrain(x, y)`, `solid(x, y)` | Terrain reads |
 | `set_attribute(pixel, key, value)` | Set this module's attribute on a pixel |
 
 Every mutating method emits the matching primitive event. Modules cannot emit events directly, so the log is always a faithful record of primitives.
@@ -141,15 +143,15 @@ An action inside an envelope:
 
 **mark**. No params. Sets the terrain of the acting pixel's current cell to the pixel's own color via `set_cell`. A pixel that alternates move and mark leaves a trail. Many pixels leave roads. The reference driver sends it with probability `MARK_CHANCE` per pixel per tick, default zero.
 
-**build**. Params `blueprint`, default `boundary_fence`. Settings `build_chance` (a suggestion drivers read, default 0.0005) and `blueprints` (allowed list, empty means all). The builder stands at the blueprint's center and stays there. Each call places the next cell of the blueprint in the builder's own color. Rules:
+**build**. Params `blueprint`, default `boundary_wall`. Settings `build_chance` (a suggestion drivers read, default 0.0005) and `blueprints` (allowed list, empty means all). The builder stands at the blueprint's center and stays there. Each call places the next cell of the blueprint in the builder's own color. Rules:
 
 - **Site.** Starting a structure is refused if the footprint would leave the builder's chunk, overlap any other structure's footprint in that chunk, finished or not, or put a wall on a cell that already has terrain. Walls never cross.
 - **Intrusion.** While unfinished, if any other pixel is anywhere in the footprint when `build` is called, all placed cells are cleared, progress resets to zero, and the reply says `destroyed`. The builder starts over on the same site.
-- **Completion.** A finished structure is permanent. Pixels may walk through it without effect, and further `build` calls just reply `done`.
+- **Completion.** A finished structure is permanent and sealed. Its walls are solid, its interior is solid too, so no pixel can move or be displaced into it. Further `build` calls just reply `done`.
 
 Replies carry `status`, `progress`, and `total`. A refused start sends the reference driver back to wandering.
 
-Blueprints are cells relative to the builder at (0, 0), in build order, plus the footprint they claim. `boundary_fence` is a 5 by 5 ring: 16 wall cells around a 3 by 3 interior. Adding a structure is adding a blueprint in `build.rs`, not a module. Walls are terrain and do not block movement yet; blocking is a later change to the move module that this design leaves room for.
+Blueprints are cells relative to the builder at (0, 0), in build order, plus the footprint they claim. `boundary_wall` is a 5 by 5 ring: 16 wall cells around a 3 by 3 interior. Adding a structure is adding a blueprint in `build.rs`, not a module. Walls are placed as solid terrain, so they block movement as soon as they exist; an unfinished wall can still be entered through the gaps.
 
 ## 9. The reference driver
 

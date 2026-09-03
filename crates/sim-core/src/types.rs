@@ -101,8 +101,15 @@ pub enum Event {
         #[serde(default, skip_serializing_if = "Attributes::is_empty")]
         attributes: Attributes,
     },
-    /// Terrain at a cell changed. `None` clears it back to white.
-    CellSet { x: u32, y: u32, color: Option<Rgba> },
+    /// Terrain at a cell changed. `color: None` renders white; `solid` blocks movement.
+    /// Both none and not solid clears the cell entirely.
+    CellSet {
+        x: u32,
+        y: u32,
+        color: Option<Rgba>,
+        #[serde(default)]
+        solid: bool,
+    },
     /// A module-owned attribute on a pixel changed.
     AttributeSet {
         id: PixelId,
@@ -116,6 +123,8 @@ pub enum Event {
 #[serde(rename_all = "snake_case")]
 pub enum RejectReason {
     Occupied,
+    /// Destination cell is solid terrain.
+    Blocked,
     OffMap,
     NotFound,
     UnknownAction,

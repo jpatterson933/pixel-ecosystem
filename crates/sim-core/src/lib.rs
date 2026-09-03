@@ -9,7 +9,7 @@ pub mod hilbert;
 pub mod types;
 
 pub use actions::{registry, ActionContext, ActionInfo, ActionModule, Module};
-pub use chunk::{CellEntry, Chunk, TickInput, TickOutput};
+pub use chunk::{Cell, CellEntry, Chunk, TickInput, TickOutput};
 pub use config::WorldConfig;
 pub use types::*;
 

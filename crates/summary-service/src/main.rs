@@ -93,7 +93,7 @@ impl Pyramid {
                 self.colors.insert(*id, *color);
                 self.add(*x, *y, *color);
             }
-            Event::CellSet { x, y, color } => {
+            Event::CellSet { x, y, color, .. } => {
                 if let Some(old) = self.terrain.remove(&(*x, *y)) {
                     self.remove(*x, *y, old);
                 }

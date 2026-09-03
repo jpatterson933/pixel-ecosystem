@@ -60,7 +60,7 @@ export class ChunkLayer {
     entry.occupied.fill(0)
     for (const c of msg.cells ?? []) {
       const i = this.index(entry, c.x, c.y)
-      if (i < 0) continue
+      if (i < 0 || !c.color) continue
       entry.terrain.set(i, c.color)
       this.paint(entry, i, c.color)
     }
